@@ -1,5 +1,6 @@
 use ratatui::{
     crossterm::event::{self, Event, KeyCode},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, BorderType, Borders, List, ListState},
 };
@@ -32,13 +33,30 @@ fn main() -> std::io::Result<()> {
 
     loop {
         terminal.draw(|frame| {
-            let block = Block::default()
+            let [feeds_area, articles_area, reader_area] = Layout::horizontal([
+                Constraint::Percentage(20),
+                Constraint::Percentage(30),
+                Constraint::Percentage(50),
+            ])
+            .areas(frame.area());
+
+            let feeds_block = Block::default()
                 .borders(Borders::ALL)
-                .title("Scrolls")
+                .title(" Feeds ")
+                .border_type(BorderType::Rounded);
+
+            let articles_block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Articles ")
+                .border_type(BorderType::Rounded);
+
+            let reader_block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Reader ")
                 .border_type(BorderType::Rounded);
 
             let list = List::new(app.articles.clone())
-                .block(block)
+                .block(articles_block)
                 .highlight_style(
                     Style::default()
                         .bg(Color::LightBlue)
@@ -47,7 +65,9 @@ fn main() -> std::io::Result<()> {
                 )
                 .highlight_symbol(">> ");
 
-            frame.render_stateful_widget(list, frame.area(), &mut app.list_state);
+            frame.render_widget(feeds_block, feeds_area);
+            frame.render_stateful_widget(list, articles_area, &mut app.list_state);
+            frame.render_widget(reader_block, reader_area);
         })?;
 
         if let Event::Key(key) = event::read()? {
