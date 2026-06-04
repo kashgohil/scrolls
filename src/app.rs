@@ -1,18 +1,45 @@
 //! Application state and the actions the UI invokes on it.
 
 use crate::db::{
-    cache_articles, data_path, delete_feed, load_articles, mark_all_read, mark_read, save_feed,
-    set_feed_category,
+    cache_articles, data_path, delete_feed, load_articles, load_category_colors, mark_all_read,
+    mark_read, save_feed, set_category_color, set_feed_category,
 };
 use crate::feed::{collect_feeds, spawn_fetch};
 use crate::model::{DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, View};
 use opml::OPML;
+use ratatui::style::Color;
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Selectable colors in the picker. Names must parse via `Color::from_str`.
+pub const PALETTE: &[(&str, Color)] = &[
+    ("red", Color::Red),
+    ("green", Color::Green),
+    ("yellow", Color::Yellow),
+    ("blue", Color::Blue),
+    ("magenta", Color::Magenta),
+    ("cyan", Color::Cyan),
+    ("gray", Color::Gray),
+    ("white", Color::White),
+    ("lightred", Color::LightRed),
+    ("lightgreen", Color::LightGreen),
+    ("lightyellow", Color::LightYellow),
+    ("lightblue", Color::LightBlue),
+    ("lightmagenta", Color::LightMagenta),
+    ("lightcyan", Color::LightCyan),
+];
+
+/// Open color-picker popup state: which category, and the highlighted row.
+pub struct ColorPicker {
+    pub category: String,
+    pub state: ListState,
+}
 
 pub struct App {
     pub feeds: Vec<Feed>,
@@ -26,6 +53,8 @@ pub struct App {
     pub toast: Option<Toast>,
     pub pending: usize,
     pub last_refresh: Instant,
+    pub category_colors: HashMap<String, Color>,
+    pub color_picker: Option<ColorPicker>,
     pub conn: Connection,
     pub tx: Sender<FetchResult>,
     pub rx: Receiver<FetchResult>,
@@ -38,6 +67,12 @@ impl App {
         tx: Sender<FetchResult>,
         rx: Receiver<FetchResult>,
     ) -> Self {
+        let category_colors = load_category_colors(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(name, c)| Color::from_str(&c).ok().map(|color| (name, color)))
+            .collect();
+
         Self {
             feeds,
             categories_state: ListState::default().with_selected(Some(0)),
@@ -50,9 +85,73 @@ impl App {
             toast: None,
             pending: 0,
             last_refresh: Instant::now(),
+            category_colors,
+            color_picker: None,
             conn,
             tx,
             rx,
+        }
+    }
+
+    /// The assigned color for a category, or a neutral default.
+    pub fn category_color(&self, name: &str) -> Color {
+        self.category_colors
+            .get(name)
+            .copied()
+            .unwrap_or(Color::White)
+    }
+
+    /// Open the color picker for the category highlighted on the left pane.
+    pub fn open_color_picker(&mut self) {
+        let cats = self.categories();
+        let Some(name) = self.categories_state.selected().and_then(|i| cats.get(i)) else {
+            return;
+        };
+        if name == "All" {
+            self.set_toast("Can't color the All view".to_string());
+            return;
+        }
+        self.color_picker = Some(ColorPicker {
+            category: name.clone(),
+            state: ListState::default().with_selected(Some(0)),
+        });
+    }
+
+    pub fn picker_prev(&mut self) {
+        if let Some(p) = &mut self.color_picker {
+            p.state.select_previous();
+        }
+    }
+
+    pub fn picker_next(&mut self) {
+        if let Some(p) = &mut self.color_picker {
+            // last selectable row is the "custom hex" entry at index PALETTE.len()
+            let next = p
+                .state
+                .selected()
+                .unwrap_or(0)
+                .saturating_add(1)
+                .min(PALETTE.len());
+            p.state.select(Some(next));
+        }
+    }
+
+    pub fn picker_cancel(&mut self) {
+        self.color_picker = None;
+    }
+
+    /// Apply the highlighted palette color, or fall back to a hex text prompt.
+    pub fn picker_confirm(&mut self) {
+        let Some(p) = self.color_picker.take() else {
+            return;
+        };
+        match PALETTE.get(p.state.selected().unwrap_or(0)) {
+            Some((name, color)) => {
+                self.category_colors.insert(p.category.clone(), *color);
+                let _ = set_category_color(&self.conn, &p.category, name);
+            }
+            // the extra "custom hex" row: open the typed prompt instead
+            None => self.input = Some((InputKind::SetColor(p.category), String::new())),
         }
     }
 
@@ -361,6 +460,13 @@ impl App {
                 }
                 let _ = set_feed_category(&self.conn, &url, &category);
             }
+            InputKind::SetColor(name) => match Color::from_str(&text) {
+                Ok(color) => {
+                    self.category_colors.insert(name.clone(), color);
+                    let _ = set_category_color(&self.conn, &name, &text);
+                }
+                Err(_) => self.set_toast(format!("Invalid color: {text}")),
+            },
             InputKind::ImportOpml => {
                 if !text.is_empty() {
                     self.import_opml(&text);
