@@ -17,7 +17,7 @@ feeds without leaving the terminal.
 
 - Three-pane home: categories, feeds, and an in-line article list
 - In-app reader that renders feed HTML as styled text
-- SQLite-backed cache — articles and read state survive restarts
+- SQLite-backed cache - articles and read state survive restarts
 - OPML import and export
 - Background fetching with periodic refresh
 - Open the original article in your system browser with one key
@@ -25,7 +25,7 @@ feeds without leaving the terminal.
 
 ## Installation
 
-**macOS / Linux — no Rust required.** Downloads a prebuilt binary into
+**macOS / Linux - no Rust required.** Downloads a prebuilt binary into
 `~/.local/bin` (make sure that's on your `PATH`):
 
 ```sh
@@ -51,13 +51,13 @@ view's block; here's the full set:
 | `↑` / `↓`        | move highlight                      | move highlight                    | scroll line by line                 |
 | `→` / `Enter`    | move into feeds / open feed         | open article in reader            | next article                        |
 | `←`              | back to categories                  | back to home                      | previous article                    |
-| `a`              | add a feed (URL, then category)     | —                                 | —                                   |
-| `c`              | set category on selected feed       | —                                 | —                                   |
-| `d`              | delete selected feed                | —                                 | —                                   |
-| `i` / `e`        | import / export OPML                | —                                 | —                                   |
-| `r`              | refresh all feeds                   | —                                 | —                                   |
-| `A`              | —                                   | mark all in feed as read          | —                                   |
-| `o`              | —                                   | open article in browser           | open article in browser             |
+| `a`              | add a feed (URL, then category)     | -                                 | -                                   |
+| `c`              | set category on selected feed       | -                                 | -                                   |
+| `d`              | delete selected feed                | -                                 | -                                   |
+| `i` / `e`        | import / export OPML                | -                                 | -                                   |
+| `r`              | refresh all feeds                   | -                                 | -                                   |
+| `A`              | -                                   | mark all in feed as read          | -                                   |
+| `o`              | -                                   | open article in browser           | open article in browser             |
 | `Esc`            | back to categories                  | back to home                      | back to articles                    |
 | `q`              | quit                                | quit                              | quit                                |
 
@@ -66,8 +66,8 @@ view's block; here's the full set:
 Scrolls keeps its database and OPML exports under your platform's data
 directory (the `dirs` crate's `data_dir`):
 
-- `scrolls/scrolls.db` — feeds, cached articles, and read state
-- `scrolls/feeds.opml` — last OPML export (created on first export)
+- `scrolls/scrolls.db` - feeds, cached articles, and read state
+- `scrolls/feeds.opml` - last OPML export (created on first export)
 
 ## License
 

@@ -113,10 +113,10 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if let Some((kind, buf)) = &app.input {
         let title = match kind {
-            InputKind::AddFeedUrl => "Feed URL — Enter for category, Esc cancel",
-            InputKind::AddFeedCategory(_) => "Category (blank = Uncategorized) — Enter to add",
-            InputKind::SetCategory(_) => "Category — Enter to set, Esc cancel",
-            InputKind::ImportOpml => "OPML file path — Enter to import, Esc cancel",
+            InputKind::AddFeedUrl => "Feed URL - Enter for category, Esc cancel",
+            InputKind::AddFeedCategory(_) => "Category (blank = Uncategorized) - Enter to add",
+            InputKind::SetCategory(_) => "Category - Enter to set, Esc cancel",
+            InputKind::ImportOpml => "OPML file path - Enter to import, Esc cancel",
         };
         let input = Paragraph::new(buf.as_str()).block(block(title));
         frame.render_widget(input, rows[2]);
