@@ -3,6 +3,22 @@
 use crate::model::{Article, DEFAULT_CATEGORY, Feed, FetchResult, Result};
 use std::sync::mpsc::Sender;
 
+/// Curated (feed URL, category) pairs seeded on first run.
+pub const DEFAULT_FEEDS: &[(&str, &str)] = &[
+    ("https://blog.rust-lang.org/feed.xml", "Programming"),
+    ("https://github.blog/feed/", "Programming"),
+    ("https://lobste.rs/rss", "Programming"),
+    ("https://hnrss.org/frontpage", "Tech"),
+    ("https://feeds.arstechnica.com/arstechnica/index", "Tech"),
+    ("https://daringfireball.net/feeds/main", "Tech"),
+    ("https://feeds.bbci.co.uk/news/world/rss.xml", "News"),
+    ("https://www.theverge.com/rss/index.xml", "News"),
+    ("https://www.sciencedaily.com/rss/all.xml", "Science"),
+    ("https://css-tricks.com/feed/", "Design"),
+    ("https://www.smashingmagazine.com/feed/", "Design"),
+    ("https://xkcd.com/rss.xml", "Comics"),
+];
+
 /// Fetch + parse one feed on a background thread, sending the result down `tx`.
 pub fn spawn_fetch(tx: Sender<FetchResult>, url: String, category: Option<String>) {
     std::thread::spawn(move || {

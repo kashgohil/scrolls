@@ -6,26 +6,16 @@ mod ui;
 
 use app::{App, REFRESH_INTERVAL};
 use db::{load_articles, load_feeds, open_db};
+use feed::DEFAULT_FEEDS;
 use model::{Feed, InputKind, Result, View};
 use ratatui::crossterm::event::{self, Event, KeyCode};
 use std::time::Duration;
-
-const FEED_URLS: &[&str] = &[
-    "https://blog.rust-lang.org/feed.xml",
-    "https://blog.rust-lang.org/inside-rust/feed.xml",
-];
 
 fn main() -> Result<()> {
     let conn = open_db()?;
 
     // Show whatever's cached immediately; the network refresh runs in the background.
     let stored = load_feeds(&conn)?;
-    let urls: Vec<String> = if stored.is_empty() {
-        FEED_URLS.iter().map(|s| s.to_string()).collect()
-    } else {
-        stored.iter().map(|(url, _, _)| url.clone()).collect()
-    };
-
     let mut feeds = Vec::new();
     for (url, title, category) in &stored {
         let articles = load_articles(&conn, url)?;
@@ -40,8 +30,16 @@ fn main() -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut terminal = ratatui::init();
     let mut app = App::new(feeds, conn, tx, rx);
-    for url in urls {
-        app.spawn_fetch(url, None);
+
+    if stored.is_empty() {
+        // first run: seed the curated, pre-categorized defaults
+        for (url, category) in DEFAULT_FEEDS {
+            app.spawn_fetch(url.to_string(), Some(category.to_string()));
+        }
+    } else {
+        for (url, _, _) in &stored {
+            app.spawn_fetch(url.clone(), None);
+        }
     }
 
     let result = run(&mut terminal, &mut app);
