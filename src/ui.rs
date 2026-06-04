@@ -386,7 +386,11 @@ fn style_for(tags: &[RichAnnotation]) -> Style {
             RichAnnotation::Strong => style.fg(Color::White).add_modifier(Modifier::BOLD),
             RichAnnotation::Emphasis => style.add_modifier(Modifier::ITALIC),
             RichAnnotation::Strikeout => style.add_modifier(Modifier::CROSSED_OUT),
-            RichAnnotation::Code | RichAnnotation::Preformat(_) => style.fg(Color::Yellow),
+            RichAnnotation::Code => style.fg(Color::Yellow),
+            // code blocks get a dark background so they read as a block
+            RichAnnotation::Preformat(_) => {
+                style.fg(Color::Yellow).bg(Color::Rgb(40, 40, 40))
+            }
             RichAnnotation::Link(_) => style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED),
             _ => style,
         };
@@ -404,6 +408,41 @@ fn render_html(html: &str, width: usize) -> Vec<Line<'static>> {
     parsed
         .iter()
         .map(|line| {
+            // code-block lines keep their run styling verbatim (a "#" inside code
+            // is not a heading)
+            let is_pre = line
+                .tagged_strings()
+                .any(|ts| ts.tag.iter().any(|t| matches!(t, RichAnnotation::Preformat(_))));
+
+            if !is_pre {
+                let text: String = line.tagged_strings().map(|ts| ts.s.as_str()).collect();
+                let trimmed = text.trim_start();
+
+                // heading: "# " .. "###### "
+                let level = trimmed.chars().take_while(|&c| c == '#').count();
+                if (1..=6).contains(&level) && trimmed[level..].starts_with(' ') {
+                    return Line::from(Span::styled(
+                        trimmed[level + 1..].to_string(),
+                        Style::default()
+                            .fg(Color::LightCyan)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+
+                // blockquote: "> "
+                if let Some(rest) = trimmed.strip_prefix("> ") {
+                    return Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                        Span::styled(
+                            rest.to_string(),
+                            Style::default()
+                                .fg(Color::Gray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]);
+                }
+            }
+
             let spans: Vec<Span> = line
                 .tagged_strings()
                 .map(|ts| Span::styled(ts.s.clone(), style_for(&ts.tag)))
