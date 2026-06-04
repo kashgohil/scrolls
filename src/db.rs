@@ -34,6 +34,13 @@ pub fn open_db() -> Result<Connection> {
         [],
     );
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS category_colors (
+            name  TEXT PRIMARY KEY,
+            color TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS articles (
             feed_url  TEXT NOT NULL,
             id        TEXT NOT NULL,
@@ -78,6 +85,23 @@ pub fn set_feed_category(conn: &Connection, url: &str, category: &str) -> Result
 pub fn delete_feed(conn: &Connection, url: &str) -> Result<()> {
     conn.execute("DELETE FROM articles WHERE feed_url = ?1", [url])?;
     conn.execute("DELETE FROM feeds WHERE url = ?1", [url])?;
+    Ok(())
+}
+
+pub fn load_category_colors(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT name, color FROM category_colors")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn set_category_color(conn: &Connection, name: &str, color: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO category_colors (name, color) VALUES (?1, ?2)
+         ON CONFLICT(name) DO UPDATE SET color = excluded.color",
+        (name, color),
+    )?;
     Ok(())
 }
 
