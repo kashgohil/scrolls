@@ -12,7 +12,6 @@ case "$os" in
   Darwin)
     case "$arch" in
       arm64 | aarch64) target="aarch64-apple-darwin" ;;
-      x86_64) target="x86_64-apple-darwin" ;;
     esac
     ;;
   Linux)
