@@ -596,6 +596,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "hard-xml"
+version = "1.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b07b8ba970e18a03dbb79f6786b6e4d6f198a0ac839aa5182017001bb8dee17"
+dependencies = [
+ "hard-xml-derive",
+ "jetscii",
+ "lazy_static",
+ "memchr",
+ "xmlparser",
+]
+
+[[package]]
+name = "hard-xml-derive"
+version = "1.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c43e7c3212bd992c11b6b9796563388170950521ae8487f5cdf6f6e792f1c8"
+dependencies = [
+ "bitflags 2.11.1",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -869,6 +894,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jetscii"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47f142fe24a9c9944451e8349de0a56af5f3e7226dc46f3ed4d4ecc0b85af75e"
+
+[[package]]
 name = "js-sys"
 version = "0.3.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1134,6 +1165,17 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "opml"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2f96426c857a92676dc29a9e2a181eb39321047ac994491c69eae01619ddf2"
+dependencies = [
+ "hard-xml",
+ "serde",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "option-ext"
@@ -1661,6 +1703,7 @@ dependencies = [
  "dirs",
  "feed-rs",
  "html2text",
+ "opml",
  "ratatui",
  "rusqlite",
  "ureq",
@@ -2643,6 +2686,12 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xmlparser"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "yoke"
