@@ -49,10 +49,16 @@ pub fn open_db() -> Result<Connection> {
             link      TEXT NOT NULL,
             published INTEGER NOT NULL,
             read      INTEGER NOT NULL DEFAULT 0,
+            saved     INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (feed_url, id)
         )",
         [],
     )?;
+    // migrate older DBs that predate the saved column
+    let _ = conn.execute(
+        "ALTER TABLE articles ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(conn)
 }
 
@@ -127,7 +133,7 @@ pub fn cache_articles(conn: &Connection, feed_url: &str, articles: &[Article]) -
 
 pub fn load_articles(conn: &Connection, feed_url: &str) -> Result<Vec<Article>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, body_html, link, read, published
+        "SELECT id, title, body_html, link, read, saved, published
          FROM articles WHERE feed_url = ?1
          ORDER BY published DESC, rowid ASC",
     )?;
@@ -139,11 +145,28 @@ pub fn load_articles(conn: &Connection, feed_url: &str) -> Result<Vec<Article>> 
                 body_html: row.get(2)?,
                 link: row.get(3)?,
                 read: row.get::<_, i64>(4)? != 0,
-                published: row.get(5)?,
+                saved: row.get::<_, i64>(5)? != 0,
+                published: row.get(6)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(articles)
+}
+
+pub fn set_read(conn: &Connection, feed_url: &str, id: &str, read: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE articles SET read = ?3 WHERE feed_url = ?1 AND id = ?2",
+        (feed_url, id, read as i64),
+    )?;
+    Ok(())
+}
+
+pub fn set_saved(conn: &Connection, feed_url: &str, id: &str, saved: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE articles SET saved = ?3 WHERE feed_url = ?1 AND id = ?2",
+        (feed_url, id, saved as i64),
+    )?;
+    Ok(())
 }
 
 pub fn mark_read(conn: &Connection, feed_url: &str, id: &str) -> Result<()> {
