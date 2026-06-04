@@ -71,6 +71,7 @@ pub fn fetch_feed(url: &str) -> Result<Feed> {
                     .unwrap_or_default(),
                 link,
                 read: false,
+                saved: false,
                 published,
             }
         })
