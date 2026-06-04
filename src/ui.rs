@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, Padding, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph},
 };
 
 const BANNER: &str = r#"
@@ -108,13 +108,19 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
                 .iter()
                 .filter(|f| c == "All" || &f.category == c)
                 .count();
-            feed_line(c, feed_count)
+            feed_line(c, feed_count, app.category_color(c))
         })
         .collect();
     let cats_focused = app.focus == HomeFocus::Categories;
+    let cat_sel_color = app
+        .categories_state
+        .selected()
+        .and_then(|i| cats.get(i))
+        .map(|c| app.category_color(c))
+        .unwrap_or(Color::LightBlue);
     let cat_list = List::new(cat_items)
         .block(pane_block("Categories", CATEGORIES_HINT, cats_focused))
-        .highlight_style(selection_style(cats_focused))
+        .highlight_style(selection_style(cat_sel_color, cats_focused))
         .highlight_symbol(">> ");
     frame.render_stateful_widget(cat_list, cat_area, &mut app.categories_state);
 
@@ -124,13 +130,17 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|&i| {
             let f = &app.feeds[i];
-            feed_line(&f.title, f.articles.len())
+            feed_line(&f.title, f.articles.len(), app.category_color(&f.category))
         })
         .collect();
     let feeds_focused = app.focus == HomeFocus::Feeds;
+    let feed_sel_color = app
+        .current_feed()
+        .map(|f| app.category_color(&f.category))
+        .unwrap_or(Color::LightBlue);
     let feed_list = List::new(feed_items)
         .block(pane_block("Feeds", FEEDS_HINT, feeds_focused))
-        .highlight_style(selection_style(feeds_focused))
+        .highlight_style(selection_style(feed_sel_color, feeds_focused))
         .highlight_symbol(">> ");
     frame.render_stateful_widget(feed_list, feed_area, &mut app.feeds_state);
 
@@ -152,30 +162,47 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
         .current_feed()
         .map(|f| f.title.clone())
         .unwrap_or_default();
-    let items: Vec<Line> = app
+    let color = app
+        .current_feed()
+        .map(|f| app.category_color(&f.category))
+        .unwrap_or(Color::LightBlue);
+    // wrap titles to the inner band, minus the marker (2) and highlight symbol (3)
+    let pad_x = band_padding(area.width);
+    let wrap_width = (area.width.saturating_sub(2 + pad_x * 2) as usize).saturating_sub(5);
+    let items: Vec<ListItem> = app
         .current_feed()
         .map(|f| {
             f.articles
                 .iter()
                 .map(|a| {
-                    let (marker, style) = if a.read {
-                        ("  ", Style::default().fg(Color::White))
+                    // category color throughout; read/unread shown via dim vs bold + marker
+                    let (marker, modifier) = if a.read {
+                        ("  ", Modifier::DIM)
                     } else {
-                        (
-                            "● ",
-                            Style::default()
-                                .fg(Color::LightBlue)
-                                .add_modifier(Modifier::BOLD),
-                        )
+                        ("● ", Modifier::BOLD)
                     };
-                    Line::from(Span::styled(format!("{marker}{}", a.title), style))
+                    let style = Style::default().fg(color).add_modifier(modifier);
+                    let lines: Vec<Line> = wrap_text(&a.title, wrap_width)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, line)| {
+                            let prefix = if i == 0 { marker } else { "  " };
+                            Line::from(Span::styled(format!("{prefix}{line}"), style))
+                        })
+                        .collect();
+                    ListItem::new(lines)
                 })
                 .collect()
         })
         .unwrap_or_default();
     let list = List::new(items)
-        .block(page_block(&title, ARTICLES_HINT, band_padding(area.width)))
-        .highlight_style(highlight_style())
+        .block(page_block(
+            &title,
+            ARTICLES_HINT,
+            band_padding(area.width),
+            color,
+        ))
+        .highlight_style(selection_style(color, true))
         .highlight_symbol(">> ");
     frame.render_stateful_widget(list, area, &mut app.articles_state);
 }
@@ -183,6 +210,10 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
     let article = app.current_article();
     let title = article.map(|a| a.title.clone()).unwrap_or_default();
+    let color = app
+        .current_feed()
+        .map(|f| app.category_color(&f.category))
+        .unwrap_or(Color::LightBlue);
 
     // full-width box, but pad the sides so text sits in a centered ~80-col band
     let pad_x = band_padding(area.width);
@@ -194,9 +225,7 @@ fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
         if !a.link.is_empty() {
             lines.push(Line::from(Span::styled(
                 a.link.clone(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::UNDERLINED),
+                Style::default().fg(color).add_modifier(Modifier::UNDERLINED),
             )));
             lines.push(Line::from(""));
         }
@@ -210,7 +239,7 @@ fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let reader = Paragraph::new(lines)
         .scroll((app.scroll, 0))
-        .block(page_block(&title, READER_HINT, pad_x));
+        .block(page_block(&title, READER_HINT, pad_x, color));
     frame.render_widget(reader, area);
 }
 
@@ -238,13 +267,13 @@ fn hint_block(title: &str, hint: &'static str) -> Block<'static> {
 
 /// Shared look for the Articles and Reader pages: centered bold title,
 /// right-aligned hint, and a padded body band.
-fn page_block(title: &str, hint: &'static str, pad_x: u16) -> Block<'static> {
+fn page_block(title: &str, hint: &'static str, pad_x: u16, title_color: Color) -> Block<'static> {
     hint_block(title, hint)
         .padding(Padding::symmetric(pad_x, 1))
         .title_alignment(Alignment::Center)
         .title_style(
             Style::default()
-                .fg(Color::LightBlue)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         )
 }
@@ -273,30 +302,80 @@ fn highlight_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// List highlight: full bar on the focused pane, subtle on the unfocused one.
-fn selection_style(focused: bool) -> Style {
+/// Black or white text, whichever reads better on `bg`.
+fn contrast_for(bg: Color) -> Color {
+    let light = match bg {
+        Color::Rgb(r, g, b) => 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32 > 140.0,
+        // bright backgrounds want dark text
+        Color::White
+        | Color::Gray
+        | Color::Yellow
+        | Color::LightYellow
+        | Color::Green
+        | Color::LightGreen
+        | Color::Cyan
+        | Color::LightCyan
+        | Color::LightRed
+        | Color::LightBlue
+        | Color::LightMagenta => true,
+        // dark backgrounds want light text
+        _ => false,
+    };
+    if light { Color::Black } else { Color::White }
+}
+
+/// Selection highlight: a `bg`-colored bar with contrasting text when focused,
+/// subtle bold when not.
+fn selection_style(bg: Color, focused: bool) -> Style {
     if focused {
-        highlight_style()
+        Style::default()
+            .bg(bg)
+            .fg(contrast_for(bg))
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     }
 }
 
-/// A list line: name plus a bold `(N)` count badge when nonzero.
-fn feed_line(name: &str, count: usize) -> Line<'static> {
+/// A list line: a `color`-tinted name plus a bold `(N)` count badge when nonzero.
+fn feed_line(name: &str, count: usize, color: Color) -> Line<'static> {
+    let name_span = Span::styled(name.to_string(), Style::default().fg(color));
     if count > 0 {
         Line::from(vec![
-            Span::raw(name.to_string()),
+            name_span,
             Span::styled(
                 format!("  ({count})"),
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
         ])
     } else {
-        Line::from(name.to_string())
+        Line::from(name_span)
     }
+}
+
+/// Greedily word-wrap `text` to `width` columns; never returns empty.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        if cur.is_empty() {
+            cur.push_str(word);
+        } else if cur.chars().count() + 1 + word.chars().count() <= width {
+            cur.push(' ');
+            cur.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur.push_str(word);
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// Build a ratatui Style from the stack of HTML annotations on a text run.
