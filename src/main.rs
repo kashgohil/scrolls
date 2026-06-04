@@ -1,132 +1,120 @@
-use ratatui::{
-    crossterm::event::{self, Event, KeyCode},
-    layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListState, Paragraph, Wrap},
-};
+mod app;
+mod db;
+mod feed;
+mod model;
+mod ui;
 
-struct Article {
-    title: String,
-    summary: String,
-    link: String,
-}
+use app::{App, REFRESH_INTERVAL};
+use db::{load_articles, load_feeds, open_db};
+use model::{Feed, InputKind, Result, View};
+use ratatui::crossterm::event::{self, Event, KeyCode};
+use std::time::Duration;
 
-struct App {
-    articles: Vec<Article>,
-    list_state: ListState,
-}
+const FEED_URLS: &[&str] = &[
+    "https://blog.rust-lang.org/feed.xml",
+    "https://blog.rust-lang.org/inside-rust/feed.xml",
+];
 
-impl App {
-    fn new(articles: Vec<Article>) -> Self {
-        let selected = if articles.is_empty() { None } else { Some(0) };
+fn main() -> Result<()> {
+    let conn = open_db()?;
 
-        Self {
+    // Show whatever's cached immediately; the network refresh runs in the background.
+    let stored = load_feeds(&conn)?;
+    let urls: Vec<String> = if stored.is_empty() {
+        FEED_URLS.iter().map(|s| s.to_string()).collect()
+    } else {
+        stored.iter().map(|(url, _, _)| url.clone()).collect()
+    };
+
+    let mut feeds = Vec::new();
+    for (url, title, category) in &stored {
+        let articles = load_articles(&conn, url)?;
+        feeds.push(Feed {
+            url: url.clone(),
+            title: title.clone(),
+            category: category.clone(),
             articles,
-            list_state: ListState::default().with_selected(selected),
-        }
+        });
     }
-}
 
-fn fetch_articles(url: &str) -> Result<Vec<Article>, Box<dyn std::error::Error>> {
-    let bytes = ureq::get(url).call()?.body_mut().read_to_vec()?;
-    let feed = feed_rs::parser::parse(bytes.as_slice())?;
-
-    let articles = feed
-        .entries
-        .into_iter()
-        .map(|entry| Article {
-            title: entry
-                .title
-                .map(|t| t.content)
-                .unwrap_or_else(|| "(untitled)".to_string()),
-            summary: {
-                let html = entry
-                    .summary
-                    .map(|t| t.content)
-                    .or_else(|| entry.content.and_then(|c| c.body))
-                    .unwrap_or_default();
-                html2text::from_read(html.as_bytes(), 80).unwrap_or(html)
-            },
-            link: entry
-                .links
-                .into_iter()
-                .next()
-                .map(|l| l.href)
-                .unwrap_or_default(),
-        })
-        .collect();
-
-    Ok(articles)
-}
-
-const FEED_URL: &str = "https://blog.rust-lang.org/feed.xml";
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let articles = fetch_articles(FEED_URL)?;
-
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut terminal = ratatui::init();
-    let mut app = App::new(articles);
+    let mut app = App::new(feeds, conn, tx, rx);
+    for url in urls {
+        app.spawn_fetch(url, None);
+    }
 
+    let result = run(&mut terminal, &mut app);
+    ratatui::restore();
+    result
+}
+
+fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut dirty = true;
     loop {
-        terminal.draw(|frame| {
-            let [feeds_area, articles_area, reader_area] = Layout::horizontal([
-                Constraint::Percentage(20),
-                Constraint::Percentage(30),
-                Constraint::Percentage(50),
-            ])
-            .areas(frame.area());
+        // apply any feeds that finished fetching in the background
+        while let Ok(msg) = app.rx.try_recv() {
+            app.apply_fetch(msg);
+            dirty = true;
+        }
+        // expire the toast once its time is up
+        if app.toast_remaining() == Some(Duration::ZERO) {
+            app.toast = None;
+            dirty = true;
+        }
+        // periodic background refresh (refresh_all resets the timer)
+        if app.last_refresh.elapsed() >= REFRESH_INTERVAL {
+            app.refresh_all();
+        }
 
-            let feeds_block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Feeds ")
-                .border_type(BorderType::Rounded);
+        if dirty {
+            terminal.draw(|frame| ui::render(frame, app))?;
+            dirty = false;
+        }
 
-            let articles_block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Articles ")
-                .border_type(BorderType::Rounded);
-
-            let reader_block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Reader ")
-                .border_type(BorderType::Rounded);
-
-            let list = List::new(app.articles.iter().map(|a| a.title.clone()))
-                .block(articles_block)
-                .highlight_style(
-                    Style::default()
-                        .bg(Color::LightBlue)
-                        .fg(Color::Black)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(">> ");
-
-            let selected_summary = app
-                .list_state
-                .selected()
-                .and_then(|i| app.articles.get(i))
-                .map(|a| a.summary.clone())
-                .unwrap_or_default();
-
-            let reader = Paragraph::new(selected_summary)
-                .block(reader_block)
-                .wrap(Wrap { trim: true });
-
-            frame.render_widget(feeds_block, feeds_area);
-            frame.render_stateful_widget(list, articles_area, &mut app.list_state);
-            frame.render_widget(reader, reader_area);
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') => break,
-                KeyCode::Up => app.list_state.select_previous(),
-                KeyCode::Down => app.list_state.select_next(),
+        if event::poll(app.poll_timeout())? {
+            match event::read()? {
+                Event::Key(key) => {
+                    dirty = true;
+                    if app.input.is_some() {
+                        match key.code {
+                            KeyCode::Char(c) => app.input.as_mut().unwrap().1.push(c),
+                            KeyCode::Backspace => {
+                                app.input.as_mut().unwrap().1.pop();
+                            }
+                            KeyCode::Enter => app.submit_input(),
+                            KeyCode::Esc => app.input = None,
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') => break,
+                            KeyCode::Char('a') if app.view == View::Home => {
+                                app.input = Some((InputKind::AddFeedUrl, String::new()));
+                            }
+                            KeyCode::Char('c') if app.view == View::Home => app.prompt_category(),
+                            KeyCode::Char('i') if app.view == View::Home => {
+                                app.input = Some((InputKind::ImportOpml, String::new()));
+                            }
+                            KeyCode::Char('e') if app.view == View::Home => app.export_opml(),
+                            KeyCode::Char('d') => app.delete_current_feed(),
+                            KeyCode::Char('r') => app.refresh_all(),
+                            KeyCode::Char('A') => app.mark_feed_read(),
+                            KeyCode::Char('o') => app.open_current(),
+                            KeyCode::Up => app.select_previous(),
+                            KeyCode::Down => app.select_next(),
+                            KeyCode::Left => app.go_left(),
+                            KeyCode::Right => app.go_right(),
+                            KeyCode::Enter => app.enter(),
+                            KeyCode::Esc => app.back(),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Resize(_, _) => dirty = true,
                 _ => {}
             }
         }
     }
-
-    ratatui::restore();
     Ok(())
 }
