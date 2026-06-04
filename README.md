@@ -25,12 +25,17 @@ feeds without leaving the terminal.
 
 ## Installation
 
-You need a recent stable [Rust toolchain].
+**macOS / Linux — no Rust required.** Downloads a prebuilt binary into
+`~/.local/bin` (make sure that's on your `PATH`):
 
 ```sh
-git clone https://github.com/kashgohil/scrolls.git
-cd scrolls
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/kashgohil/scrolls/master/install.sh | sh
+```
+
+**With Rust** (any platform):
+
+```sh
+cargo install --git https://github.com/kashgohil/scrolls
 ```
 
 The first run seeds the database with a couple of Rust blog feeds. After

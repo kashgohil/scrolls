@@ -2,6 +2,17 @@
 name = "scrolls"
 version = "0.1.0"
 edition = "2024"
+description = "A terminal RSS reader"
+license = "MIT"
+repository = "https://github.com/kashgohil/scrolls"
+readme = "README.md"
+keywords = ["rss", "tui", "terminal", "feed-reader"]
+categories = ["command-line-utilities"]
+
+# Smaller, faster release binaries for distribution.
+[profile.release]
+strip = true
+lto = true
 
 [dependencies]
 dirs = "6.0.0"
