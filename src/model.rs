@@ -13,6 +13,7 @@ pub struct Article {
     pub body_html: String,
     pub link: String,
     pub read: bool,
+    pub saved: bool,
     pub published: i64,
 }
 
