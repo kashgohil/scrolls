@@ -74,7 +74,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             match event::read()? {
                 Event::Key(key) => {
                     dirty = true;
-                    if app.input.is_some() {
+                    if app.color_picker.is_some() {
+                        match key.code {
+                            KeyCode::Up => app.picker_prev(),
+                            KeyCode::Down => app.picker_next(),
+                            KeyCode::Enter => app.picker_confirm(),
+                            KeyCode::Esc => app.picker_cancel(),
+                            _ => {}
+                        }
+                    } else if app.input.is_some() {
                         match key.code {
                             KeyCode::Char(c) => app.input.as_mut().unwrap().1.push(c),
                             KeyCode::Backspace => {
@@ -91,6 +99,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                                 app.input = Some((InputKind::AddFeedUrl, String::new()));
                             }
                             KeyCode::Char('c') if app.view == View::Home => app.prompt_category(),
+                            KeyCode::Char('p') if app.view == View::Home => app.open_color_picker(),
                             KeyCode::Char('i') if app.view == View::Home => {
                                 app.input = Some((InputKind::ImportOpml, String::new()));
                             }
