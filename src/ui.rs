@@ -1,6 +1,6 @@
 //! All rendering: the per-frame draw plus widget-styling helpers.
 
-use crate::app::App;
+use crate::app::{App, PALETTE};
 use crate::model::{HomeFocus, InputKind, View};
 use html2text::render::RichAnnotation;
 use ratatui::{
@@ -22,7 +22,7 @@ const BANNER: &str = r#"
 "#;
 
 // Per-page shortcut hints, shown bottom-right on each view's block.
-const CATEGORIES_HINT: &str = " ↑↓ · →/Enter feeds · q quit ";
+const CATEGORIES_HINT: &str = " ↑↓ · →/Enter feeds · p color · q quit ";
 const FEEDS_HINT: &str =
     " ↑↓ · Enter open · a add · c cat · d del · i/e opml · r refresh · ← back ";
 const ARTICLES_HINT: &str = " ↑↓ move · Enter read · A mark all · o open · Esc back · q quit ";
@@ -36,6 +36,29 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         View::Home => render_home(frame, app, area),
         View::Articles => render_articles(frame, app, area),
         View::Reader => render_reader(frame, app, area),
+    }
+
+    // color-picker popup (centered), when open
+    if let Some(picker) = &mut app.color_picker {
+        let mut items: Vec<Line> = PALETTE
+            .iter()
+            .map(|(name, color)| {
+                Line::from(vec![
+                    Span::styled("███ ", Style::default().fg(*color)),
+                    Span::raw(*name),
+                ])
+            })
+            .collect();
+        items.push(Line::from("custom (hex)"));
+
+        let height = items.len() as u16 + 2;
+        let rect = centered_rect(28, height, area);
+        let list = List::new(items)
+            .block(block(&format!("Color: {}", picker.category)))
+            .highlight_style(highlight_style())
+            .highlight_symbol(">> ");
+        frame.render_widget(Clear, rect);
+        frame.render_stateful_widget(list, rect, &mut picker.state);
     }
 
     // toast overlay (bottom-right), drawn on top of everything
@@ -116,6 +139,7 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
             InputKind::AddFeedUrl => "Feed URL - Enter for category, Esc cancel",
             InputKind::AddFeedCategory(_) => "Category (blank = Uncategorized) - Enter to add",
             InputKind::SetCategory(_) => "Category - Enter to set, Esc cancel",
+            InputKind::SetColor(_) => "Color - name (e.g. lightblue) or #rrggbb, Enter to set",
             InputKind::ImportOpml => "OPML file path - Enter to import, Esc cancel",
         };
         let input = Paragraph::new(buf.as_str()).block(block(title));
@@ -188,6 +212,16 @@ fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.scroll, 0))
         .block(page_block(&title, READER_HINT, pad_x));
     frame.render_widget(reader, area);
+}
+
+/// A `w` x `h` rectangle centered within `area` (clamped to fit).
+fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
+    Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    }
 }
 
 fn block(title: &str) -> Block<'static> {
