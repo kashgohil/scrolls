@@ -107,6 +107,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                             KeyCode::Char('d') => app.delete_current_feed(),
                             KeyCode::Char('r') => app.refresh_all(),
                             KeyCode::Char('A') => app.mark_feed_read(),
+                            KeyCode::Char('s') => app.toggle_current_saved(),
+                            KeyCode::Char('t') => app.toggle_current_read(),
                             KeyCode::Char('o') => app.open_current(),
                             KeyCode::Up => app.select_previous(),
                             KeyCode::Down => app.select_next(),

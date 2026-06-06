@@ -2,7 +2,7 @@
 
 use crate::db::{
     cache_articles, data_path, delete_feed, load_articles, load_category_colors, mark_all_read,
-    mark_read, save_feed, set_category_color, set_feed_category,
+    mark_read, save_feed, set_category_color, set_feed_category, set_read, set_saved,
 };
 use crate::feed::{collect_feeds, spawn_fetch};
 use crate::model::{DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, View};
@@ -50,6 +50,7 @@ pub struct App {
     pub view: View,
     pub scroll: u16,
     pub input: Option<(InputKind, String)>,
+    pub article_search: Option<String>,
     pub toast: Option<Toast>,
     pub pending: usize,
     pub last_refresh: Instant,
@@ -82,6 +83,7 @@ impl App {
             view: View::Home,
             scroll: 0,
             input: None,
+            article_search: None,
             toast: None,
             pending: 0,
             last_refresh: Instant::now(),
@@ -290,11 +292,59 @@ impl App {
     }
 
     pub fn current_article(&self) -> Option<&crate::model::Article> {
-        self.current_feed().and_then(|f| {
-            self.articles_state
-                .selected()
-                .and_then(|i| f.articles.get(i))
-        })
+        let fi = self.current_feed_idx()?;
+        let ai = self.current_article_idx()?;
+        self.feeds[fi].articles.get(ai)
+    }
+
+    /// The active article search query (live input buffer, else the applied filter).
+    pub fn article_query(&self) -> Option<String> {
+        self.article_search.as_ref().map(|s| s.to_lowercase())
+    }
+
+    /// Indices into the current feed's articles matching the search filter.
+    pub fn visible_article_indices(&self) -> Vec<usize> {
+        let Some(feed) = self.current_feed() else {
+            return Vec::new();
+        };
+        let query = self.article_query();
+        feed.articles
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| match &query {
+                Some(q) if !q.is_empty() => a.title.to_lowercase().contains(q),
+                _ => true,
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Real index (into the feed's articles) of the highlighted article.
+    pub fn current_article_idx(&self) -> Option<usize> {
+        let sel = self.articles_state.selected()?;
+        self.visible_article_indices().get(sel).copied()
+    }
+
+    /// Flip the highlighted article's read state.
+    pub fn toggle_current_read(&mut self) {
+        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+            return;
+        };
+        let feed = &mut self.feeds[fi];
+        let article = &mut feed.articles[ai];
+        article.read = !article.read;
+        let _ = set_read(&self.conn, &feed.url, &article.id, article.read);
+    }
+
+    /// Flip the highlighted article's saved (starred) state.
+    pub fn toggle_current_saved(&mut self) {
+        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+            return;
+        };
+        let feed = &mut self.feeds[fi];
+        let article = &mut feed.articles[ai];
+        article.saved = !article.saved;
+        let _ = set_saved(&self.conn, &feed.url, &article.id, article.saved);
     }
 
     pub fn enter(&mut self) {
@@ -330,13 +380,11 @@ impl App {
     }
 
     fn mark_current_read(&mut self) {
-        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.articles_state.selected()) else {
+        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
             return;
         };
         let feed = &mut self.feeds[fi];
-        let Some(article) = feed.articles.get_mut(ai) else {
-            return;
-        };
+        let article = &mut feed.articles[ai];
         if article.read {
             return;
         }
@@ -467,6 +515,7 @@ impl App {
                 }
                 Err(_) => self.set_toast(format!("Invalid color: {text}")),
             },
+            InputKind::SearchArticles => {}
             InputKind::ImportOpml => {
                 if !text.is_empty() {
                     self.import_opml(&text);
