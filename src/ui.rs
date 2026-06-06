@@ -25,7 +25,8 @@ const BANNER: &str = r#"
 const CATEGORIES_HINT: &str = " ↑↓ · →/Enter feeds · p color · q quit ";
 const FEEDS_HINT: &str =
     " ↑↓ · Enter open · a add · c cat · d del · i/e opml · r refresh · ← back ";
-const ARTICLES_HINT: &str = " ↑↓ move · Enter read · A mark all · o open · Esc back · q quit ";
+const ARTICLES_HINT: &str =
+    " ↑↓ · Enter read · / search · s save · t toggle · A mark all · o open · Esc back ";
 const READER_HINT: &str = " ↑↓ scroll · ←→ prev/next · o open · Esc back · q quit ";
 
 /// Draw the whole UI for the current frame.
@@ -151,6 +152,7 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
             InputKind::SetCategory(_) => "Category - Enter to set, Esc cancel",
             InputKind::SetColor(_) => "Color - name (e.g. lightblue) or #rrggbb, Enter to set",
             InputKind::ImportOpml => "OPML file path - Enter to import, Esc cancel",
+            InputKind::SearchArticles => "Search",
         };
         let input = Paragraph::new(buf.as_str()).block(block(title));
         frame.render_widget(input, rows[2]);
@@ -158,7 +160,14 @@ fn render_home(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = app
+    let searching = matches!(&app.input, Some((InputKind::SearchArticles, _)));
+    let rows = if searching {
+        Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area)
+    } else {
+        Layout::vertical([Constraint::Min(0)]).split(area)
+    };
+
+    let feed_title = app
         .current_feed()
         .map(|f| f.title.clone())
         .unwrap_or_default();
@@ -166,45 +175,64 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
         .current_feed()
         .map(|f| app.category_color(&f.category))
         .unwrap_or(Color::LightBlue);
-    // wrap titles to the inner band, minus the marker (2) and highlight symbol (3)
-    let pad_x = band_padding(area.width);
-    let wrap_width = (area.width.saturating_sub(2 + pad_x * 2) as usize).saturating_sub(5);
+    let title = match app.article_query() {
+        Some(q) if !q.is_empty() => format!("{feed_title} - search: {q}"),
+        _ => feed_title,
+    };
+
+    // wrap titles to the inner band, minus the markers (4) and highlight symbol (3)
+    let pad_x = band_padding(rows[0].width);
+    let wrap_width = (rows[0].width.saturating_sub(2 + pad_x * 2) as usize).saturating_sub(7);
+
+    let fi = app.current_feed_idx();
     let items: Vec<ListItem> = app
-        .current_feed()
-        .map(|f| {
-            f.articles
-                .iter()
-                .map(|a| {
-                    // category color throughout; read/unread shown via dim vs bold + marker
-                    let (marker, modifier) = if a.read {
-                        ("  ", Modifier::DIM)
+        .visible_article_indices()
+        .iter()
+        .filter_map(|&ai| fi.map(|fi| &app.feeds[fi].articles[ai]))
+        .map(|a| {
+            let modifier = if a.read {
+                Modifier::DIM
+            } else {
+                Modifier::BOLD
+            };
+            let style = Style::default().fg(color).add_modifier(modifier);
+            let dot = if a.read { "  " } else { "● " };
+            let star = if a.saved {
+                Span::styled("★ ", Style::default().fg(Color::Yellow))
+            } else {
+                Span::raw("  ")
+            };
+            let wrapped = wrap_text(&a.title, wrap_width);
+            let lines: Vec<Line> = wrapped
+                .into_iter()
+                .enumerate()
+                .map(|(i, line)| {
+                    if i == 0 {
+                        Line::from(vec![
+                            Span::styled(dot, style),
+                            star.clone(),
+                            Span::styled(line, style),
+                        ])
                     } else {
-                        ("● ", Modifier::BOLD)
-                    };
-                    let style = Style::default().fg(color).add_modifier(modifier);
-                    let lines: Vec<Line> = wrap_text(&a.title, wrap_width)
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, line)| {
-                            let prefix = if i == 0 { marker } else { "  " };
-                            Line::from(Span::styled(format!("{prefix}{line}"), style))
-                        })
-                        .collect();
-                    ListItem::new(lines)
+                        Line::from(Span::styled(format!("    {line}"), style))
+                    }
                 })
-                .collect()
+                .collect();
+            ListItem::new(lines)
         })
-        .unwrap_or_default();
+        .collect();
+
     let list = List::new(items)
-        .block(page_block(
-            &title,
-            ARTICLES_HINT,
-            band_padding(area.width),
-            color,
-        ))
+        .block(page_block(&title, ARTICLES_HINT, pad_x, color))
         .highlight_style(selection_style(color, true))
         .highlight_symbol(">> ");
-    frame.render_stateful_widget(list, area, &mut app.articles_state);
+    frame.render_stateful_widget(list, rows[0], &mut app.articles_state);
+
+    if let Some((InputKind::SearchArticles, buf)) = &app.input {
+        let input =
+            Paragraph::new(buf.as_str()).block(block("Search - type to filter, Esc cancel"));
+        frame.render_widget(input, rows[1]);
+    }
 }
 
 fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -225,7 +253,9 @@ fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
         if !a.link.is_empty() {
             lines.push(Line::from(Span::styled(
                 a.link.clone(),
-                Style::default().fg(color).add_modifier(Modifier::UNDERLINED),
+                Style::default()
+                    .fg(color)
+                    .add_modifier(Modifier::UNDERLINED),
             )));
             lines.push(Line::from(""));
         }
@@ -388,9 +418,7 @@ fn style_for(tags: &[RichAnnotation]) -> Style {
             RichAnnotation::Strikeout => style.add_modifier(Modifier::CROSSED_OUT),
             RichAnnotation::Code => style.fg(Color::Yellow),
             // code blocks get a dark background so they read as a block
-            RichAnnotation::Preformat(_) => {
-                style.fg(Color::Yellow).bg(Color::Rgb(40, 40, 40))
-            }
+            RichAnnotation::Preformat(_) => style.fg(Color::Yellow).bg(Color::Rgb(40, 40, 40)),
             RichAnnotation::Link(_) => style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED),
             _ => style,
         };
@@ -410,9 +438,11 @@ fn render_html(html: &str, width: usize) -> Vec<Line<'static>> {
         .map(|line| {
             // code-block lines keep their run styling verbatim (a "#" inside code
             // is not a heading)
-            let is_pre = line
-                .tagged_strings()
-                .any(|ts| ts.tag.iter().any(|t| matches!(t, RichAnnotation::Preformat(_))));
+            let is_pre = line.tagged_strings().any(|ts| {
+                ts.tag
+                    .iter()
+                    .any(|t| matches!(t, RichAnnotation::Preformat(_)))
+            });
 
             if !is_pre {
                 let text: String = line.tagged_strings().map(|ts| ts.s.as_str()).collect();

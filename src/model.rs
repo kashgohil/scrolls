@@ -44,6 +44,7 @@ pub enum InputKind {
     AddFeedCategory(String), // carries the URL just entered
     SetCategory(String),     // carries the target feed's URL
     SetColor(String),        // carries the category name to recolor
+    SearchArticles,
     ImportOpml,
 }
 

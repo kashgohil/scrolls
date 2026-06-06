@@ -299,7 +299,11 @@ impl App {
 
     /// The active article search query (live input buffer, else the applied filter).
     pub fn article_query(&self) -> Option<String> {
-        self.article_search.as_ref().map(|s| s.to_lowercase())
+        if let Some((InputKind::SearchArticles, buf)) = &self.input {
+            Some(buf.to_lowercase())
+        } else {
+            self.article_search.as_ref().map(|s| s.to_lowercase())
+        }
     }
 
     /// Indices into the current feed's articles matching the search filter.
@@ -345,6 +349,14 @@ impl App {
         let article = &mut feed.articles[ai];
         article.saved = !article.saved;
         let _ = set_saved(&self.conn, &feed.url, &article.id, article.saved);
+    }
+
+    /// Open the article search prompt (live filters the list as you type).
+    pub fn start_search(&mut self) {
+        if self.view == View::Articles {
+            let initial = self.article_search.clone().unwrap_or_default();
+            self.input = Some((InputKind::SearchArticles, initial));
+        }
     }
 
     pub fn enter(&mut self) {
@@ -395,7 +407,14 @@ impl App {
     pub fn back(&mut self) {
         match self.view {
             View::Reader => self.view = View::Articles,
-            View::Articles => self.view = View::Home, // returns to the feeds pane
+            // a search filter clears first; a second Esc returns home
+            View::Articles => {
+                if self.article_search.take().is_some() {
+                    self.articles_state.select(Some(0));
+                } else {
+                    self.view = View::Home;
+                }
+            }
             // On Home, Esc steps from the feeds pane back to the category pane.
             View::Home => self.focus = HomeFocus::Categories,
         }
@@ -515,7 +534,11 @@ impl App {
                 }
                 Err(_) => self.set_toast(format!("Invalid color: {text}")),
             },
-            InputKind::SearchArticles => {}
+            InputKind::SearchArticles => {
+                // Enter applies the filter and keeps it; blank clears it.
+                self.article_search = if text.is_empty() { None } else { Some(text) };
+                self.articles_state.select(Some(0));
+            }
             InputKind::ImportOpml => {
                 if !text.is_empty() {
                     self.import_opml(&text);
