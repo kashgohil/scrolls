@@ -28,9 +28,31 @@ pub fn spawn_fetch(tx: Sender<FetchResult>, url: String, category: Option<String
 }
 
 pub fn fetch_feed(url: &str) -> Result<Feed> {
-    let bytes = ureq::get(url).call()?.body_mut().read_to_vec()?;
-    let feed = feed_rs::parser::parse(bytes.as_slice())?;
+    // allow bare hosts like "theverge.com"
+    let normalized = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    let url = normalized.as_str();
 
+    let bytes = ureq::get(url).call()?.body_mut().read_to_vec()?;
+
+    // Direct feed?
+    if let Ok(feed) = feed_rs::parser::parse(bytes.as_slice()) {
+        return Ok(build_feed(url, feed));
+    }
+
+    // Otherwise treat it as a web page and look for a linked feed.
+    let html = String::from_utf8_lossy(&bytes);
+    let discovered = discover_feed_url(&html, url).ok_or("no RSS/Atom feed found at that URL")?;
+    let bytes = ureq::get(&discovered).call()?.body_mut().read_to_vec()?;
+    let feed = feed_rs::parser::parse(bytes.as_slice())?;
+    Ok(build_feed(&discovered, feed))
+}
+
+/// Convert a parsed feed-rs feed into our model.
+fn build_feed(url: &str, feed: feed_rs::model::Feed) -> Feed {
     let title = feed
         .title
         .map(|t| t.content)
@@ -64,10 +86,12 @@ pub fn fetch_feed(url: &str) -> Result<Feed> {
                     .title
                     .map(|t| t.content)
                     .unwrap_or_else(|| "(untitled)".to_string()),
+                // prefer full content (<content:encoded>/<content>) over the
+                // shorter summary/description
                 body_html: entry
-                    .summary
-                    .map(|t| t.content)
-                    .or_else(|| entry.content.and_then(|c| c.body))
+                    .content
+                    .and_then(|c| c.body)
+                    .or_else(|| entry.summary.map(|t| t.content))
                     .unwrap_or_default(),
                 link,
                 read: false,
@@ -77,12 +101,65 @@ pub fn fetch_feed(url: &str) -> Result<Feed> {
         })
         .collect();
 
-    Ok(Feed {
+    Feed {
         url: url.to_string(),
         title,
         category: DEFAULT_CATEGORY.to_string(), // real category is applied in apply_fetch
         articles,
-    })
+    }
+}
+
+/// Find an RSS/Atom feed link in an HTML page's `<link rel=alternate>` tags.
+fn discover_feed_url(html: &str, base: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    for ty in ["application/rss+xml", "application/atom+xml"] {
+        let mut from = 0;
+        while let Some(pos) = lower[from..].find(ty) {
+            let abs = from + pos;
+            let tag_start = lower[..abs].rfind('<')?;
+            let tag_end = lower[abs..]
+                .find('>')
+                .map(|e| abs + e)
+                .unwrap_or(html.len());
+            if let Some(href) = extract_attr(&html[tag_start..=tag_end], "href") {
+                return Some(resolve_url(&href, base));
+            }
+            from = tag_end;
+        }
+    }
+    None
+}
+
+/// Pull a quoted (or bare) attribute value out of a single HTML tag.
+fn extract_attr(tag: &str, attr: &str) -> Option<String> {
+    let i = tag.to_lowercase().find(attr)?;
+    let after = tag[i + attr.len()..].trim_start_matches([' ', '=']);
+    let mut chars = after.chars();
+    match chars.next()? {
+        q @ ('"' | '\'') => after[1..].find(q).map(|e| after[1..=e].to_string()),
+        _ => {
+            let end = after
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(after.len());
+            Some(after[..end].to_string())
+        }
+    }
+}
+
+/// Resolve a possibly-relative href against the page URL (common cases only).
+fn resolve_url(href: &str, base: &str) -> String {
+    let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
+    let host = rest.split('/').next().unwrap_or(rest);
+    if href.starts_with("http://") || href.starts_with("https://") {
+        href.to_string()
+    } else if let Some(pr) = href.strip_prefix("//") {
+        format!("{scheme}://{pr}")
+    } else if href.starts_with('/') {
+        format!("{scheme}://{host}{href}")
+    } else {
+        let dir = base.rsplit_once('/').map(|(d, _)| d).unwrap_or(base);
+        format!("{dir}/{href}")
+    }
 }
 
 /// Collect (feed URL, category) from nested OPML outlines; a parent outline's
