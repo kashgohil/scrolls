@@ -1,7 +1,7 @@
 //! All rendering: the per-frame draw plus widget-styling helpers.
 
 use crate::app::{App, ImageEntry, PALETTE};
-use crate::model::{HomeFocus, InputKind, ToastKind, View};
+use crate::model::{ArticleFilter, ArticleSource, HomeFocus, InputKind, ToastKind, View};
 use html2text::render::{RichAnnotation, TaggedLine};
 use ratatui::{
     Frame,
@@ -23,12 +23,12 @@ const BANNER: &str = r#"
 "#;
 
 // Per-page shortcut hints, shown bottom-right on each view's block.
-const CATEGORIES_HINT: &str = " ↑↓ · →/Enter feeds · p color · q quit ";
+const CATEGORIES_HINT: &str = " ↑↓ · →/Enter feeds · p color · S saved · q quit ";
 const FEEDS_HINT: &str =
     " ↑↓ · Enter open · a add · c cat · d del · i/e opml · r refresh · ← back ";
 const ARTICLES_HINT: &str =
-    " ↑↓ · Enter read · / search · s save · t toggle · A mark all · o open · Esc back ";
-const READER_HINT: &str = " ↑↓ scroll · ←→ prev/next · f full · o open · Esc back · q quit ";
+    " ↑↓ · Enter read · / search · F filter · s save · t toggle · A mark all · Esc back ";
+const READER_HINT: &str = " ↑↓ scroll · ←→ prev/next · s save · f full · o open · Esc back ";
 
 /// Draw the whole UI for the current frame.
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -172,35 +172,50 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
         Layout::vertical([Constraint::Min(0)]).split(area)
     };
 
-    let feed_title = app
-        .current_feed()
-        .map(|f| f.title.clone())
-        .unwrap_or_default();
-    let color = app
-        .current_feed()
-        .map(|f| app.category_color(&f.category))
-        .unwrap_or(Color::LightBlue);
-    let title = match app.article_query() {
-        Some(q) if !q.is_empty() => format!("{feed_title} - search: {q}"),
-        _ => feed_title,
+    // page title + accent color depend on the source (a feed, or the Saved view)
+    let saved_view = app.article_source == ArticleSource::Saved;
+    let (mut title, page_color) = if saved_view {
+        ("★ Saved".to_string(), Color::Yellow)
+    } else {
+        let feed = app.current_feed();
+        (
+            feed.map(|f| f.title.clone()).unwrap_or_default(),
+            feed.map(|f| app.category_color(&f.category))
+                .unwrap_or(Color::LightBlue),
+        )
     };
+    if !saved_view {
+        match app.article_filter {
+            ArticleFilter::Unread => title.push_str(" · unread"),
+            ArticleFilter::Saved => title.push_str(" · saved"),
+            ArticleFilter::All => {}
+        }
+    }
+    if let Some(q) = app.article_query().filter(|q| !q.is_empty()) {
+        title.push_str(&format!(" · search: {q}"));
+    }
 
     // wrap titles to the inner band, minus the markers (4) and highlight symbol (3)
     let pad_x = band_padding(rows[0].width);
     let wrap_width = (rows[0].width.saturating_sub(2 + pad_x * 2) as usize).saturating_sub(7);
 
-    let fi = app.current_feed_idx();
     let items: Vec<ListItem> = app
-        .visible_article_indices()
+        .article_refs()
         .iter()
-        .filter_map(|&ai| fi.map(|fi| &app.feeds[fi].articles[ai]))
-        .map(|a| {
+        .map(|&(fi, ai)| {
+            let a = &app.feeds[fi].articles[ai];
+            // in the Saved view each item is tinted by its own feed's category
+            let item_color = if saved_view {
+                app.category_color(&app.feeds[fi].category)
+            } else {
+                page_color
+            };
             let modifier = if a.read {
                 Modifier::DIM
             } else {
                 Modifier::BOLD
             };
-            let style = Style::default().fg(color).add_modifier(modifier);
+            let style = Style::default().fg(item_color).add_modifier(modifier);
             let dot = if a.read { "  " } else { "● " };
             let star = if a.saved {
                 Span::styled("★ ", Style::default().fg(Color::Yellow))
@@ -228,8 +243,8 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(page_block(&title, ARTICLES_HINT, pad_x, color))
-        .highlight_style(selection_style(color, true))
+        .block(page_block(&title, ARTICLES_HINT, pad_x, page_color))
+        .highlight_style(selection_style(page_color, true))
         .highlight_symbol(">> ");
     frame.render_stateful_widget(list, rows[0], &mut app.articles_state);
 
@@ -248,8 +263,8 @@ fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
             article.map(|a| a.title.clone()).unwrap_or_default(),
             article.map(|a| a.link.clone()).unwrap_or_default(),
             article.map(|a| a.body_html.clone()).unwrap_or_default(),
-            app.current_feed()
-                .map(|f| app.category_color(&f.category))
+            app.current_feed_color_idx()
+                .map(|fi| app.category_color(&app.feeds[fi].category))
                 .unwrap_or(Color::LightBlue),
         )
     };
