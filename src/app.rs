@@ -4,14 +4,16 @@ use crate::db::{
     cache_articles, data_path, delete_feed, load_articles, load_category_colors, mark_all_read,
     mark_read, save_feed, set_body, set_category_color, set_feed_category, set_read, set_saved,
 };
-use crate::feed::{collect_feeds, spawn_content, spawn_fetch};
+use crate::feed::{collect_feeds, spawn_content, spawn_fetch, spawn_image};
 use crate::model::{
-    ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, ToastKind,
-    View,
+    ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, ImageResult, InputKind, Toast,
+    ToastKind, View,
 };
 use opml::OPML;
 use ratatui::style::Color;
 use ratatui::widgets::ListState;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -44,6 +46,13 @@ pub struct ColorPicker {
     pub state: ListState,
 }
 
+/// Cached state of an inline image, keyed by its absolute URL.
+pub enum ImageEntry {
+    Loading,
+    Ready(StatefulProtocol),
+    Failed,
+}
+
 pub struct App {
     pub feeds: Vec<Feed>,
     pub categories_state: ListState,
@@ -60,11 +69,18 @@ pub struct App {
     pub category_colors: HashMap<String, Color>,
     pub color_picker: Option<ColorPicker>,
     pub content_pending: usize,
+    /// Image rendering is only enabled when the terminal supports a real
+    /// graphics protocol (None = render no images at all).
+    pub picker: Option<Picker>,
+    pub images: HashMap<String, ImageEntry>,
+    pub image_pending: usize,
     pub conn: Connection,
     pub tx: Sender<FetchResult>,
     pub rx: Receiver<FetchResult>,
     pub content_tx: Sender<ContentResult>,
     pub content_rx: Receiver<ContentResult>,
+    pub img_tx: Sender<ImageResult>,
+    pub img_rx: Receiver<ImageResult>,
 }
 
 impl App {
@@ -73,6 +89,7 @@ impl App {
         conn: Connection,
         tx: Sender<FetchResult>,
         rx: Receiver<FetchResult>,
+        picker: Option<Picker>,
     ) -> Self {
         let category_colors = load_category_colors(&conn)
             .unwrap_or_default()
@@ -81,6 +98,7 @@ impl App {
             .collect();
 
         let (content_tx, content_rx) = std::sync::mpsc::channel();
+        let (img_tx, img_rx) = std::sync::mpsc::channel();
 
         Self {
             feeds,
@@ -98,12 +116,40 @@ impl App {
             category_colors,
             color_picker: None,
             content_pending: 0,
+            picker,
+            images: HashMap::new(),
+            image_pending: 0,
             conn,
             tx,
             rx,
             content_tx,
             content_rx,
+            img_tx,
+            img_rx,
         }
+    }
+
+    /// Ensure an inline image is loading/loaded (no-op if images are disabled).
+    pub fn ensure_image(&mut self, src: String) {
+        if self.picker.is_none() || self.images.contains_key(&src) {
+            return;
+        }
+        self.images.insert(src.clone(), ImageEntry::Loading);
+        self.image_pending += 1;
+        spawn_image(self.img_tx.clone(), src);
+    }
+
+    /// Apply a decoded image: build its terminal protocol, or mark it failed.
+    pub fn apply_image(&mut self, msg: ImageResult) {
+        self.image_pending = self.image_pending.saturating_sub(1);
+        let entry = match (&self.picker, msg.result) {
+            // skip tiny images (tracking pixels, icons)
+            (Some(picker), Ok(img)) if img.width() >= 48 && img.height() >= 48 => {
+                ImageEntry::Ready(picker.new_resize_protocol(img))
+            }
+            _ => ImageEntry::Failed,
+        };
+        self.images.insert(msg.src, entry);
     }
 
     /// The assigned color for a category, or a neutral default.
@@ -195,7 +241,7 @@ impl App {
     /// is counting down, otherwise block until input.
     pub fn poll_timeout(&self) -> Duration {
         let mut timeout = REFRESH_INTERVAL.saturating_sub(self.last_refresh.elapsed());
-        if self.pending > 0 || self.content_pending > 0 {
+        if self.pending > 0 || self.content_pending > 0 || self.image_pending > 0 {
             timeout = timeout.min(Duration::from_millis(100));
         }
         if let Some(remaining) = self.toast_remaining() {

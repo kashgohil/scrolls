@@ -27,9 +27,15 @@ fn main() -> Result<()> {
         });
     }
 
+    // Progressive: only enable images if the terminal speaks a real graphics
+    // protocol (Kitty/iTerm2/Sixel). Halfblocks/failure => no images at all.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .ok()
+        .filter(|p| p.protocol_type() != ratatui_image::picker::ProtocolType::Halfblocks);
+
     let (tx, rx) = std::sync::mpsc::channel();
     let mut terminal = ratatui::init();
-    let mut app = App::new(feeds, conn, tx, rx);
+    let mut app = App::new(feeds, conn, tx, rx, picker);
 
     if stored.is_empty() {
         // first run: seed the curated, pre-categorized defaults
@@ -58,6 +64,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         // apply any on-demand full-article fetches
         while let Ok(msg) = app.content_rx.try_recv() {
             app.apply_content(msg);
+            dirty = true;
+        }
+        // apply any decoded inline images
+        while let Ok(msg) = app.img_rx.try_recv() {
+            app.apply_image(msg);
             dirty = true;
         }
         // expire the toast once its time is up
