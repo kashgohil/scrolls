@@ -48,9 +48,15 @@ pub enum InputKind {
     ImportOpml,
 }
 
-/// A transient error message shown in the corner until it expires.
+pub enum ToastKind {
+    Info,
+    Error,
+}
+
+/// A transient message shown in the corner until it expires.
 pub struct Toast {
     pub message: String,
+    pub kind: ToastKind,
     pub expires_at: Instant,
 }
 

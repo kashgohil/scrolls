@@ -1,7 +1,7 @@
 //! All rendering: the per-frame draw plus widget-styling helpers.
 
 use crate::app::{App, PALETTE};
-use crate::model::{HomeFocus, InputKind, View};
+use crate::model::{HomeFocus, InputKind, ToastKind, View};
 use html2text::render::RichAnnotation;
 use ratatui::{
     Frame,
@@ -71,9 +71,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             width,
             height: 3,
         };
+        let (color, label) = match toast.kind {
+            ToastKind::Info => (Color::Green, "info"),
+            ToastKind::Error => (Color::Red, "error"),
+        };
         let widget = Paragraph::new(toast.message.as_str())
-            .style(Style::default().fg(Color::Red))
-            .block(block("error").border_style(Style::default().fg(Color::Red)));
+            .style(Style::default().fg(color))
+            .block(block(label).border_style(Style::default().fg(color)));
         frame.render_widget(Clear, rect);
         frame.render_widget(widget, rect);
     }

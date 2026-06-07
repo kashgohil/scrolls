@@ -5,7 +5,7 @@ use crate::db::{
     mark_read, save_feed, set_category_color, set_feed_category, set_read, set_saved,
 };
 use crate::feed::{collect_feeds, spawn_fetch};
-use crate::model::{DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, View};
+use crate::model::{DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, ToastKind, View};
 use opml::OPML;
 use ratatui::style::Color;
 use ratatui::widgets::ListState;
@@ -110,7 +110,7 @@ impl App {
             return;
         };
         if name == "All" {
-            self.set_toast("Can't color the All view".to_string());
+            self.set_error("Can't color the All view".to_string());
             return;
         }
         self.color_picker = Some(ColorPicker {
@@ -158,8 +158,17 @@ impl App {
     }
 
     pub fn set_toast(&mut self, message: String) {
+        self.push_toast(message, ToastKind::Info);
+    }
+
+    pub fn set_error(&mut self, message: String) {
+        self.push_toast(message, ToastKind::Error);
+    }
+
+    fn push_toast(&mut self, message: String, kind: ToastKind) {
         self.toast = Some(Toast {
             message,
+            kind,
             expires_at: Instant::now() + Duration::from_secs(4),
         });
     }
@@ -250,7 +259,7 @@ impl App {
         let feed = match msg.outcome {
             Ok(feed) => feed,
             Err(e) => {
-                self.set_toast(format!("Fetch failed: {e}"));
+                self.set_error(format!("Fetch failed: {e}"));
                 return;
             }
         };
@@ -487,11 +496,11 @@ impl App {
             return;
         };
         if link.is_empty() {
-            self.set_toast("No link for this article".to_string());
+            self.set_error("No link for this article".to_string());
             return;
         }
         if let Err(e) = open::that(&link) {
-            self.set_toast(format!("Couldn't open browser: {e}"));
+            self.set_error(format!("Couldn't open browser: {e}"));
         }
     }
 
@@ -532,7 +541,7 @@ impl App {
                     self.category_colors.insert(name.clone(), color);
                     let _ = set_category_color(&self.conn, &name, &text);
                 }
-                Err(_) => self.set_toast(format!("Invalid color: {text}")),
+                Err(_) => self.set_error(format!("Invalid color: {text}")),
             },
             InputKind::SearchArticles => {
                 // Enter applies the filter and keeps it; blank clears it.
@@ -557,11 +566,11 @@ impl App {
     fn import_opml(&mut self, path: &str) {
         let xml = match std::fs::read_to_string(path) {
             Ok(xml) => xml,
-            Err(e) => return self.set_toast(format!("Can't read {path}: {e}")),
+            Err(e) => return self.set_error(format!("Can't read {path}: {e}")),
         };
         let doc = match OPML::from_str(&xml) {
             Ok(doc) => doc,
-            Err(e) => return self.set_toast(format!("Invalid OPML: {e}")),
+            Err(e) => return self.set_error(format!("Invalid OPML: {e}")),
         };
 
         let mut feeds = Vec::new();
@@ -602,10 +611,10 @@ impl App {
             .to_string()
             .map_err(|e| e.to_string())
             .and_then(|xml| std::fs::write(&path, xml).map_err(|e| e.to_string()));
-        self.set_toast(match result {
-            Ok(()) => format!("Exported to {}", path.display()),
-            Err(e) => format!("Export failed: {e}"),
-        });
+        match result {
+            Ok(()) => self.set_toast(format!("Exported to {}", path.display())),
+            Err(e) => self.set_error(format!("Export failed: {e}")),
+        }
     }
 
     pub fn delete_current_feed(&mut self) {
@@ -618,7 +627,7 @@ impl App {
 
         let url = self.feeds[i].url.clone();
         if let Err(e) = delete_feed(&self.conn, &url) {
-            self.set_toast(format!("Failed to delete: {e}"));
+            self.set_error(format!("Failed to delete: {e}"));
             return;
         }
         self.feeds.remove(i);
