@@ -38,6 +38,21 @@ pub enum HomeFocus {
     Feeds,
 }
 
+/// Filter applied to the article list.
+#[derive(PartialEq, Clone, Copy)]
+pub enum ArticleFilter {
+    All,
+    Unread,
+    Saved,
+}
+
+/// What the Articles/Reader views are showing.
+#[derive(PartialEq, Clone, Copy)]
+pub enum ArticleSource {
+    Feed(usize), // a single feed, by index
+    Saved,       // saved articles aggregated across all feeds
+}
+
 /// What the text-input prompt is collecting.
 pub enum InputKind {
     AddFeedUrl,
