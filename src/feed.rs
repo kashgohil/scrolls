@@ -1,6 +1,7 @@
 //! Fetching/parsing feeds over the network and OPML helpers.
 
-use crate::model::{Article, DEFAULT_CATEGORY, Feed, FetchResult, Result};
+use crate::model::{Article, ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, Result};
+use dom_smoothie::Readability;
 use std::sync::mpsc::Sender;
 
 /// Curated (feed URL, category) pairs seeded on first run.
@@ -25,6 +26,30 @@ pub fn spawn_fetch(tx: Sender<FetchResult>, url: String, category: Option<String
         let outcome = fetch_feed(&url).map_err(|e| e.to_string());
         let _ = tx.send(FetchResult { outcome, category });
     });
+}
+
+/// Fetch an article's page and extract its readable content on a background thread.
+pub fn spawn_content(tx: Sender<ContentResult>, feed_url: String, id: String, link: String) {
+    std::thread::spawn(move || {
+        let body = fetch_readable(&link);
+        let _ = tx.send(ContentResult { feed_url, id, body });
+    });
+}
+
+/// Download `url` and extract the main article HTML via readability.
+fn fetch_readable(url: &str) -> std::result::Result<String, String> {
+    let bytes = ureq::get(url)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    let html = String::from_utf8_lossy(&bytes);
+    let article = Readability::new(html.as_ref(), Some(url), None)
+        .map_err(|e| e.to_string())?
+        .parse()
+        .map_err(|e| e.to_string())?;
+    Ok(article.content.to_string())
 }
 
 pub fn fetch_feed(url: &str) -> Result<Feed> {

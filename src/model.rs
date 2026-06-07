@@ -66,3 +66,10 @@ pub struct FetchResult {
     /// Category to assign (Some for a fresh add/import, None to keep existing).
     pub category: Option<String>,
 }
+
+/// Result of an on-demand full-article fetch (readability extraction).
+pub struct ContentResult {
+    pub feed_url: String,
+    pub id: String,
+    pub body: std::result::Result<String, String>,
+}

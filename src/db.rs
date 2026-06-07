@@ -169,6 +169,14 @@ pub fn set_saved(conn: &Connection, feed_url: &str, id: &str, saved: bool) -> Re
     Ok(())
 }
 
+pub fn set_body(conn: &Connection, feed_url: &str, id: &str, body: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE articles SET body_html = ?3 WHERE feed_url = ?1 AND id = ?2",
+        (feed_url, id, body),
+    )?;
+    Ok(())
+}
+
 pub fn mark_read(conn: &Connection, feed_url: &str, id: &str) -> Result<()> {
     conn.execute(
         "UPDATE articles SET read = 1 WHERE feed_url = ?1 AND id = ?2",

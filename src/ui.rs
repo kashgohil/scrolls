@@ -27,7 +27,7 @@ const FEEDS_HINT: &str =
     " ↑↓ · Enter open · a add · c cat · d del · i/e opml · r refresh · ← back ";
 const ARTICLES_HINT: &str =
     " ↑↓ · Enter read · / search · s save · t toggle · A mark all · o open · Esc back ";
-const READER_HINT: &str = " ↑↓ scroll · ←→ prev/next · o open · Esc back · q quit ";
+const READER_HINT: &str = " ↑↓ scroll · ←→ prev/next · f full · o open · Esc back · q quit ";
 
 /// Draw the whole UI for the current frame.
 pub fn render(frame: &mut Frame, app: &mut App) {

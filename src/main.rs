@@ -55,6 +55,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             app.apply_fetch(msg);
             dirty = true;
         }
+        // apply any on-demand full-article fetches
+        while let Ok(msg) = app.content_rx.try_recv() {
+            app.apply_content(msg);
+            dirty = true;
+        }
         // expire the toast once its time is up
         if app.toast_remaining() == Some(Duration::ZERO) {
             app.toast = None;
@@ -110,6 +115,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                             KeyCode::Char('/') if app.view == View::Articles => app.start_search(),
                             KeyCode::Char('s') => app.toggle_current_saved(),
                             KeyCode::Char('t') => app.toggle_current_read(),
+                            KeyCode::Char('f') => app.fetch_full_content(),
                             KeyCode::Char('o') => app.open_current(),
                             KeyCode::Up => app.select_previous(),
                             KeyCode::Down => app.select_next(),

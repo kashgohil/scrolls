@@ -2,10 +2,13 @@
 
 use crate::db::{
     cache_articles, data_path, delete_feed, load_articles, load_category_colors, mark_all_read,
-    mark_read, save_feed, set_category_color, set_feed_category, set_read, set_saved,
+    mark_read, save_feed, set_body, set_category_color, set_feed_category, set_read, set_saved,
 };
-use crate::feed::{collect_feeds, spawn_fetch};
-use crate::model::{DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, ToastKind, View};
+use crate::feed::{collect_feeds, spawn_content, spawn_fetch};
+use crate::model::{
+    ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, InputKind, Toast, ToastKind,
+    View,
+};
 use opml::OPML;
 use ratatui::style::Color;
 use ratatui::widgets::ListState;
@@ -56,9 +59,12 @@ pub struct App {
     pub last_refresh: Instant,
     pub category_colors: HashMap<String, Color>,
     pub color_picker: Option<ColorPicker>,
+    pub content_pending: usize,
     pub conn: Connection,
     pub tx: Sender<FetchResult>,
     pub rx: Receiver<FetchResult>,
+    pub content_tx: Sender<ContentResult>,
+    pub content_rx: Receiver<ContentResult>,
 }
 
 impl App {
@@ -73,6 +79,8 @@ impl App {
             .into_iter()
             .filter_map(|(name, c)| Color::from_str(&c).ok().map(|color| (name, color)))
             .collect();
+
+        let (content_tx, content_rx) = std::sync::mpsc::channel();
 
         Self {
             feeds,
@@ -89,9 +97,12 @@ impl App {
             last_refresh: Instant::now(),
             category_colors,
             color_picker: None,
+            content_pending: 0,
             conn,
             tx,
             rx,
+            content_tx,
+            content_rx,
         }
     }
 
@@ -184,7 +195,7 @@ impl App {
     /// is counting down, otherwise block until input.
     pub fn poll_timeout(&self) -> Duration {
         let mut timeout = REFRESH_INTERVAL.saturating_sub(self.last_refresh.elapsed());
-        if self.pending > 0 {
+        if self.pending > 0 || self.content_pending > 0 {
             timeout = timeout.min(Duration::from_millis(100));
         }
         if let Some(remaining) = self.toast_remaining() {
@@ -358,6 +369,45 @@ impl App {
         let article = &mut feed.articles[ai];
         article.saved = !article.saved;
         let _ = set_saved(&self.conn, &feed.url, &article.id, article.saved);
+    }
+
+    /// Fetch the current article's full content from its page (readability).
+    pub fn fetch_full_content(&mut self) {
+        if self.view != View::Reader {
+            return;
+        }
+        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+            return;
+        };
+        let article = &self.feeds[fi].articles[ai];
+        if article.link.is_empty() {
+            self.set_error("No link to fetch".to_string());
+            return;
+        }
+        let feed_url = self.feeds[fi].url.clone();
+        let (id, link) = (article.id.clone(), article.link.clone());
+        self.content_pending += 1;
+        self.set_toast("Fetching full article…".to_string());
+        spawn_content(self.content_tx.clone(), feed_url, id, link);
+    }
+
+    /// Apply a fetched full-content result: replace the cached body in place.
+    pub fn apply_content(&mut self, msg: ContentResult) {
+        self.content_pending = self.content_pending.saturating_sub(1);
+        match msg.body {
+            Ok(body) if !body.trim().is_empty() => {
+                if let Some(feed) = self.feeds.iter_mut().find(|f| f.url == msg.feed_url) {
+                    if let Some(a) = feed.articles.iter_mut().find(|a| a.id == msg.id) {
+                        a.body_html = body.clone();
+                    }
+                }
+                let _ = set_body(&self.conn, &msg.feed_url, &msg.id, &body);
+                self.scroll = 0;
+                self.set_toast("Loaded full article".to_string());
+            }
+            Ok(_) => self.set_error("No readable content found".to_string()),
+            Err(e) => self.set_error(format!("Fetch failed: {e}")),
+        }
     }
 
     /// Open the article search prompt (live filters the list as you type).
