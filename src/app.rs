@@ -6,8 +6,8 @@ use crate::db::{
 };
 use crate::feed::{collect_feeds, spawn_content, spawn_fetch, spawn_image};
 use crate::model::{
-    ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus, ImageResult, InputKind, Toast,
-    ToastKind, View,
+    ArticleFilter, ArticleSource, ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, HomeFocus,
+    ImageResult, InputKind, Toast, ToastKind, View,
 };
 use opml::OPML;
 use ratatui::style::Color;
@@ -63,6 +63,8 @@ pub struct App {
     pub scroll: u16,
     pub input: Option<(InputKind, String)>,
     pub article_search: Option<String>,
+    pub article_filter: ArticleFilter,
+    pub article_source: ArticleSource,
     pub toast: Option<Toast>,
     pub pending: usize,
     pub last_refresh: Instant,
@@ -110,6 +112,8 @@ impl App {
             scroll: 0,
             input: None,
             article_search: None,
+            article_filter: ArticleFilter::All,
+            article_source: ArticleSource::Feed(0),
             toast: None,
             pending: 0,
             last_refresh: Instant::now(),
@@ -357,10 +361,13 @@ impl App {
         self.current_feed_idx().map(|i| &self.feeds[i])
     }
 
+    pub fn current_feed_color_idx(&self) -> Option<usize> {
+        self.current_article_ref().map(|(fi, _)| fi)
+    }
+
     pub fn current_article(&self) -> Option<&crate::model::Article> {
-        let fi = self.current_feed_idx()?;
-        let ai = self.current_article_idx()?;
-        self.feeds[fi].articles.get(ai)
+        let (fi, ai) = self.current_article_ref()?;
+        self.feeds.get(fi)?.articles.get(ai)
     }
 
     /// The active article search query (live input buffer, else the applied filter).
@@ -372,32 +379,58 @@ impl App {
         }
     }
 
-    /// Indices into the current feed's articles matching the search filter.
-    pub fn visible_article_indices(&self) -> Vec<usize> {
-        let Some(feed) = self.current_feed() else {
-            return Vec::new();
-        };
+    /// (feed index, article index) pairs for the current article list, after
+    /// search and filter. The Saved source aggregates across all feeds.
+    pub fn article_refs(&self) -> Vec<(usize, usize)> {
         let query = self.article_query();
-        feed.articles
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| match &query {
-                Some(q) if !q.is_empty() => a.title.to_lowercase().contains(q),
-                _ => true,
-            })
-            .map(|(i, _)| i)
-            .collect()
+        let matches = |a: &crate::model::Article| match &query {
+            Some(q) if !q.is_empty() => a.title.to_lowercase().contains(q),
+            _ => true,
+        };
+        match self.article_source {
+            ArticleSource::Saved => self
+                .feeds
+                .iter()
+                .enumerate()
+                .flat_map(|(fi, f)| {
+                    f.articles
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.saved && matches(a))
+                        .map(move |(ai, _)| (fi, ai))
+                })
+                .collect(),
+            ArticleSource::Feed(fi) => {
+                let Some(f) = self.feeds.get(fi) else {
+                    return Vec::new();
+                };
+                let filter = self.article_filter;
+                f.articles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| {
+                        matches(a)
+                            && match filter {
+                                ArticleFilter::All => true,
+                                ArticleFilter::Unread => !a.read,
+                                ArticleFilter::Saved => a.saved,
+                            }
+                    })
+                    .map(|(ai, _)| (fi, ai))
+                    .collect()
+            }
+        }
     }
 
-    /// Real index (into the feed's articles) of the highlighted article.
-    pub fn current_article_idx(&self) -> Option<usize> {
+    /// (feed, article) indices of the highlighted article.
+    pub fn current_article_ref(&self) -> Option<(usize, usize)> {
         let sel = self.articles_state.selected()?;
-        self.visible_article_indices().get(sel).copied()
+        self.article_refs().get(sel).copied()
     }
 
     /// Flip the highlighted article's read state.
     pub fn toggle_current_read(&mut self) {
-        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+        let Some((fi, ai)) = self.current_article_ref() else {
             return;
         };
         let feed = &mut self.feeds[fi];
@@ -408,7 +441,7 @@ impl App {
 
     /// Flip the highlighted article's saved (starred) state.
     pub fn toggle_current_saved(&mut self) {
-        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+        let Some((fi, ai)) = self.current_article_ref() else {
             return;
         };
         let feed = &mut self.feeds[fi];
@@ -422,7 +455,7 @@ impl App {
         if self.view != View::Reader {
             return;
         }
-        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+        let Some((fi, ai)) = self.current_article_ref() else {
             return;
         };
         let article = &self.feeds[fi].articles[ai];
@@ -456,6 +489,16 @@ impl App {
         }
     }
 
+    /// Cycle the article list filter: All -> Unread -> Saved -> All.
+    pub fn cycle_article_filter(&mut self) {
+        self.article_filter = match self.article_filter {
+            ArticleFilter::All => ArticleFilter::Unread,
+            ArticleFilter::Unread => ArticleFilter::Saved,
+            ArticleFilter::Saved => ArticleFilter::All,
+        };
+        self.articles_state.select(Some(0));
+    }
+
     /// Open the article search prompt (live filters the list as you type).
     pub fn start_search(&mut self) {
         if self.view == View::Articles {
@@ -471,10 +514,12 @@ impl App {
             View::Home => match self.focus {
                 HomeFocus::Categories => self.focus_feeds(),
                 HomeFocus::Feeds => {
-                    let has_articles = self.current_feed().is_some_and(|f| !f.articles.is_empty());
-                    if has_articles {
-                        self.articles_state.select(Some(0));
-                        self.view = View::Articles;
+                    if let Some(fi) = self.current_feed_idx() {
+                        if !self.feeds[fi].articles.is_empty() {
+                            self.article_source = ArticleSource::Feed(fi);
+                            self.articles_state.select(Some(0));
+                            self.view = View::Articles;
+                        }
                     }
                 }
             },
@@ -497,7 +542,7 @@ impl App {
     }
 
     fn mark_current_read(&mut self) {
-        let (Some(fi), Some(ai)) = (self.current_feed_idx(), self.current_article_idx()) else {
+        let Some((fi, ai)) = self.current_article_ref() else {
             return;
         };
         let feed = &mut self.feeds[fi];
@@ -507,6 +552,14 @@ impl App {
         }
         article.read = true;
         let _ = mark_read(&self.conn, &feed.url, &article.id);
+    }
+
+    /// Open the cross-feed Saved view (all starred articles).
+    pub fn open_saved(&mut self) {
+        self.article_source = ArticleSource::Saved;
+        self.articles_state.select(Some(0));
+        self.scroll = 0;
+        self.view = View::Articles;
     }
 
     pub fn back(&mut self) {
