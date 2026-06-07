@@ -120,10 +120,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                                 app.input = Some((InputKind::ImportOpml, String::new()));
                             }
                             KeyCode::Char('e') if app.view == View::Home => app.export_opml(),
+                            KeyCode::Char('S') if app.view == View::Home => app.open_saved(),
                             KeyCode::Char('d') => app.delete_current_feed(),
                             KeyCode::Char('r') => app.refresh_all(),
                             KeyCode::Char('A') => app.mark_feed_read(),
                             KeyCode::Char('/') if app.view == View::Articles => app.start_search(),
+                            KeyCode::Char('F') if app.view == View::Articles => {
+                                app.cycle_article_filter()
+                            }
                             KeyCode::Char('s') => app.toggle_current_saved(),
                             KeyCode::Char('t') => app.toggle_current_read(),
                             KeyCode::Char('f') => app.fetch_full_content(),
