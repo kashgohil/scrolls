@@ -73,3 +73,9 @@ pub struct ContentResult {
     pub id: String,
     pub body: std::result::Result<String, String>,
 }
+
+/// Result of a background inline-image fetch + decode.
+pub struct ImageResult {
+    pub src: String,
+    pub result: std::result::Result<image::DynamicImage, String>,
+}

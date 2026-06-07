@@ -1,8 +1,28 @@
 //! Fetching/parsing feeds over the network and OPML helpers.
 
-use crate::model::{Article, ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, Result};
+use crate::model::{
+    Article, ContentResult, DEFAULT_CATEGORY, Feed, FetchResult, ImageResult, Result,
+};
 use dom_smoothie::Readability;
 use std::sync::mpsc::Sender;
+
+/// Fetch + decode one image on a background thread.
+pub fn spawn_image(tx: Sender<ImageResult>, src: String) {
+    std::thread::spawn(move || {
+        let result = fetch_image(&src);
+        let _ = tx.send(ImageResult { src, result });
+    });
+}
+
+fn fetch_image(url: &str) -> std::result::Result<image::DynamicImage, String> {
+    let bytes = ureq::get(url)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    image::load_from_memory(&bytes).map_err(|e| e.to_string())
+}
 
 /// Curated (feed URL, category) pairs seeded on first run.
 pub const DEFAULT_FEEDS: &[(&str, &str)] = &[
@@ -172,7 +192,7 @@ fn extract_attr(tag: &str, attr: &str) -> Option<String> {
 }
 
 /// Resolve a possibly-relative href against the page URL (common cases only).
-fn resolve_url(href: &str, base: &str) -> String {
+pub fn resolve_url(href: &str, base: &str) -> String {
     let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
     let host = rest.split('/').next().unwrap_or(rest);
     if href.starts_with("http://") || href.starts_with("https://") {
