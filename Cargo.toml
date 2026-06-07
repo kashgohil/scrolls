@@ -24,3 +24,5 @@ ratatui = "0.30.0"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 ureq = "3.3.0"
 dom_smoothie = "0.17.0"
+ratatui-image = { version = "11.0.4", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
