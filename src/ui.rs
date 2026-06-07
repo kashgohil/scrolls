@@ -1,8 +1,8 @@
 //! All rendering: the per-frame draw plus widget-styling helpers.
 
-use crate::app::{App, PALETTE};
+use crate::app::{App, ImageEntry, PALETTE};
 use crate::model::{HomeFocus, InputKind, ToastKind, View};
-use html2text::render::RichAnnotation;
+use html2text::render::{RichAnnotation, TaggedLine};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph},
 };
+use ratatui_image::{Resize, StatefulImage};
 
 const BANNER: &str = r#"
 ███████╗ ██████╗██████╗  ██████╗ ██╗     ██╗     ███████╗
@@ -240,41 +241,90 @@ fn render_articles(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_reader(frame: &mut Frame, app: &mut App, area: Rect) {
-    let article = app.current_article();
-    let title = article.map(|a| a.title.clone()).unwrap_or_default();
-    let color = app
-        .current_feed()
-        .map(|f| app.category_color(&f.category))
-        .unwrap_or(Color::LightBlue);
+    // gather what we need, then drop the immutable borrows on `app`
+    let (title, link, body, color) = {
+        let article = app.current_article();
+        (
+            article.map(|a| a.title.clone()).unwrap_or_default(),
+            article.map(|a| a.link.clone()).unwrap_or_default(),
+            article.map(|a| a.body_html.clone()).unwrap_or_default(),
+            app.current_feed()
+                .map(|f| app.category_color(&f.category))
+                .unwrap_or(Color::LightBlue),
+        )
+    };
 
     // full-width box, but pad the sides so text sits in a centered ~80-col band
     let pad_x = band_padding(area.width);
-    // inner text width = area minus borders (2) minus side padding
     let content_width = area.width.saturating_sub(2 + pad_x * 2).max(10) as usize;
+    let images_on = app.picker.is_some();
 
+    let (body_lines, mut placements) = render_body(&body, &link, content_width, images_on);
+
+    // prepend the link line; shift image placements down by that offset
     let mut lines: Vec<Line> = Vec::new();
-    if let Some(a) = article {
-        if !a.link.is_empty() {
-            lines.push(Line::from(Span::styled(
-                a.link.clone(),
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::UNDERLINED),
-            )));
-            lines.push(Line::from(""));
+    let offset = if link.is_empty() { 0 } else { 2 };
+    if !link.is_empty() {
+        lines.push(Line::from(Span::styled(
+            link.clone(),
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::UNDERLINED),
+        )));
+        lines.push(Line::from(""));
+    }
+    lines.extend(body_lines);
+    for p in &mut placements {
+        p.0 += offset;
+    }
+
+    // kick off loading for any images we'll show
+    if images_on {
+        for (_, src) in &placements {
+            app.ensure_image(src.clone());
         }
-        lines.extend(render_html(&a.body_html, content_width));
     }
 
     // clamp scroll so we can't run past the end
-    let inner_height = area.height.saturating_sub(2 + 2); // borders + vert padding
+    let inner_height = area.height.saturating_sub(4); // borders + vert padding
     let max_scroll = (lines.len() as u16).saturating_sub(inner_height);
     app.scroll = app.scroll.min(max_scroll);
+    let scroll = app.scroll;
 
-    let reader = Paragraph::new(lines)
-        .scroll((app.scroll, 0))
-        .block(page_block(&title, READER_HINT, pad_x, color));
+    let reader = Paragraph::new(lines).scroll((scroll, 0)).block(page_block(
+        &title,
+        READER_HINT,
+        pad_x,
+        color,
+    ));
     frame.render_widget(reader, area);
+
+    // overlay each ready image whose full band is currently visible
+    let inner_left = area.x + 1 + pad_x;
+    let inner_top = area.y + 2;
+    let inner_w = content_width as u16;
+    for (line_idx, src) in &placements {
+        let g = *line_idx as u16;
+        let visible =
+            g >= scroll && g.saturating_add(IMAGE_ROWS) <= scroll.saturating_add(inner_height);
+        if !visible {
+            continue;
+        }
+        if let Some(ImageEntry::Ready(proto)) = app.images.get_mut(src) {
+            let rect = Rect {
+                x: inner_left,
+                y: inner_top + (g - scroll),
+                width: inner_w,
+                height: IMAGE_ROWS,
+            };
+            frame.render_widget(Clear, rect);
+            frame.render_stateful_widget(
+                StatefulImage::default().resize(Resize::Fit(None)),
+                rect,
+                proto,
+            );
+        }
+    }
 }
 
 /// A `w` x `h` rectangle centered within `area` (clamped to fit).
@@ -430,58 +480,87 @@ fn style_for(tags: &[RichAnnotation]) -> Style {
     style
 }
 
-/// Render HTML into styled lines, wrapped to `width`.
-fn render_html(html: &str, width: usize) -> Vec<Line<'static>> {
+/// Cell-rows reserved for each inline image in the text flow.
+const IMAGE_ROWS: u16 = 16;
+
+/// Style one tagged line: headings, blockquotes, or styled runs.
+fn style_line(line: &TaggedLine<Vec<RichAnnotation>>) -> Line<'static> {
+    // code-block lines keep their run styling verbatim (a "#" inside code is not a heading)
+    let is_pre = line.tagged_strings().any(|ts| {
+        ts.tag
+            .iter()
+            .any(|t| matches!(t, RichAnnotation::Preformat(_)))
+    });
+
+    if !is_pre {
+        let text: String = line.tagged_strings().map(|ts| ts.s.as_str()).collect();
+        let trimmed = text.trim_start();
+
+        // heading: "# " .. "###### "
+        let level = trimmed.chars().take_while(|&c| c == '#').count();
+        if (1..=6).contains(&level) && trimmed[level..].starts_with(' ') {
+            return Line::from(Span::styled(
+                trimmed[level + 1..].to_string(),
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        // blockquote: "> "
+        if let Some(rest) = trimmed.strip_prefix("> ") {
+            return Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    rest.to_string(),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]);
+        }
+    }
+
+    let spans: Vec<Span> = line
+        .tagged_strings()
+        .map(|ts| Span::styled(ts.s.clone(), style_for(&ts.tag)))
+        .collect();
+    Line::from(spans)
+}
+
+/// Render article HTML into styled lines wrapped to `width`. When `images` is
+/// true, each `<img>` reserves a blank band and its absolute URL is returned
+/// with the line index; otherwise images are dropped entirely.
+fn render_body(
+    html: &str,
+    base: &str,
+    width: usize,
+    images: bool,
+) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
     let parsed = match html2text::from_read_rich(html.as_bytes(), width.max(1)) {
         Ok(lines) => lines,
-        Err(_) => return vec![Line::from(html.to_string())],
+        Err(_) => return (vec![Line::from(html.to_string())], Vec::new()),
     };
 
-    parsed
-        .iter()
-        .map(|line| {
-            // code-block lines keep their run styling verbatim (a "#" inside code
-            // is not a heading)
-            let is_pre = line.tagged_strings().any(|ts| {
-                ts.tag
-                    .iter()
-                    .any(|t| matches!(t, RichAnnotation::Preformat(_)))
-            });
-
-            if !is_pre {
-                let text: String = line.tagged_strings().map(|ts| ts.s.as_str()).collect();
-                let trimmed = text.trim_start();
-
-                // heading: "# " .. "###### "
-                let level = trimmed.chars().take_while(|&c| c == '#').count();
-                if (1..=6).contains(&level) && trimmed[level..].starts_with(' ') {
-                    return Line::from(Span::styled(
-                        trimmed[level + 1..].to_string(),
-                        Style::default()
-                            .fg(Color::LightCyan)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-
-                // blockquote: "> "
-                if let Some(rest) = trimmed.strip_prefix("> ") {
-                    return Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(
-                            rest.to_string(),
-                            Style::default()
-                                .fg(Color::Gray)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]);
+    let mut out: Vec<Line> = Vec::new();
+    let mut placements: Vec<(usize, String)> = Vec::new();
+    for line in parsed.iter() {
+        let src = line.tagged_strings().find_map(|ts| {
+            ts.tag.iter().find_map(|t| match t {
+                RichAnnotation::Image(s) => Some(s.clone()),
+                _ => None,
+            })
+        });
+        match src {
+            Some(src) if images => {
+                placements.push((out.len(), crate::feed::resolve_url(&src, base)));
+                for _ in 0..IMAGE_ROWS {
+                    out.push(Line::from(""));
                 }
             }
-
-            let spans: Vec<Span> = line
-                .tagged_strings()
-                .map(|ts| Span::styled(ts.s.clone(), style_for(&ts.tag)))
-                .collect();
-            Line::from(spans)
-        })
-        .collect()
+            Some(_) => {} // images disabled: drop the image line
+            None => out.push(style_line(line)),
+        }
+    }
+    (out, placements)
 }
